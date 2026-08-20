@@ -7,6 +7,8 @@ const MAX_MESSAGE_LENGTH = 2000;
 const CHAT_DURATION_MINUTES = 60;
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const MAX_FILE_SENDS_PER_CHAT = 5;
+const FILE_CHUNK_BASE64_LENGTH = 128 * 1024;
+const MAX_SOCKET_BUFFER = 512 * 1024;
 const SIMPLE_EMOJIS = ['😀', '😂', '😍', '🥰', '😎', '😭', '😡', '👍', '👏', '🙏', '❤️', '🎉'];
 
 function makeSessionId() {
@@ -113,6 +115,9 @@ export default function ChatApp() {
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const pendingFileIdRef = useRef(null);
+  const outgoingFileRef = useRef(null);
+  const incomingFilesRef = useRef(new Map());
+  const startFileStreamRef = useRef(null);
 
   useEffect(() => {
     const initial = loadState();
@@ -283,12 +288,10 @@ export default function ChatApp() {
         });
         break;
       }
-      case 'file_message': {
+      case 'file_start': {
         setSession((current) => {
           if (!current?.chats?.[data.chatId]) return current;
           const chat = current.chats[data.chatId];
-          const alreadyReceived = chat.messages.some((message) => message.id === data.messageId);
-          const isActive = activeChatRef.current === data.chatId;
           return {
             ...current,
             chats: {
@@ -297,27 +300,101 @@ export default function ChatApp() {
                 ...chat,
                 attachmentCount: data.attachmentCount,
                 maxFileSends: data.maxFileSends ?? MAX_FILE_SENDS_PER_CHAT,
-                unread: !alreadyReceived && !isActive ? (chat.unread ?? 0) + 1 : chat.unread,
-                messages: alreadyReceived ? chat.messages : [
-                  ...chat.messages,
-                  {
-                    id: data.messageId,
-                    kind: 'file',
-                    from: data.from.id,
-                    file: data.file,
-                    timestamp: data.timestamp,
-                  },
-                ],
               },
             },
           };
         });
-        if (pendingFileIdRef.current === data.messageId) {
+
+        if (data.from.id === sessionRef.current?.sessionId && outgoingFileRef.current?.transferId === data.transferId) {
+          outgoingFileRef.current.file = { ...data.file, data: outgoingFileRef.current.file.data };
+          outgoingFileRef.current.timestamp = data.timestamp;
+          startFileStreamRef.current?.(data.transferId);
+        } else {
+          incomingFilesRef.current.set(data.transferId, {
+            chatId: data.chatId,
+            from: data.from.id,
+            file: data.file,
+            timestamp: data.timestamp,
+            chunks: [],
+          });
+        }
+        break;
+      }
+      case 'file_chunk': {
+        const transfer = incomingFilesRef.current.get(data.transferId);
+        if (transfer?.chatId === data.chatId && typeof data.data === 'string') {
+          transfer.chunks.push(data.data);
+        }
+        break;
+      }
+      case 'file_end': {
+        const outgoing = outgoingFileRef.current?.transferId === data.transferId
+          ? outgoingFileRef.current
+          : null;
+        const incoming = incomingFilesRef.current.get(data.transferId);
+        const transfer = outgoing || incoming;
+        if (transfer) {
+          const file = outgoing
+            ? outgoing.file
+            : { ...incoming.file, data: incoming.chunks.join('') };
+          const from = outgoing ? sessionRef.current?.sessionId : incoming.from;
+          setSession((current) => {
+            if (!current?.chats?.[transfer.chatId]) return current;
+            const chat = current.chats[transfer.chatId];
+            if (chat.messages.some((message) => message.id === data.transferId)) return current;
+            const isActive = activeChatRef.current === transfer.chatId;
+            return {
+              ...current,
+              chats: {
+                ...current.chats,
+                [transfer.chatId]: {
+                  ...chat,
+                  unread: !outgoing && !isActive ? (chat.unread ?? 0) + 1 : chat.unread,
+                  messages: [
+                    ...chat.messages,
+                    {
+                      id: data.transferId,
+                      kind: 'file',
+                      from,
+                      file,
+                      timestamp: transfer.timestamp,
+                    },
+                  ],
+                },
+              },
+            };
+          });
+        }
+        incomingFilesRef.current.delete(data.transferId);
+        if (outgoing) {
+          outgoingFileRef.current = null;
           pendingFileIdRef.current = null;
           setSendingFile(false);
         }
         break;
       }
+      case 'file_abort':
+        incomingFilesRef.current.delete(data.transferId);
+        setSession((current) => {
+          if (!current?.chats?.[data.chatId]) return current;
+          return {
+            ...current,
+            chats: {
+              ...current.chats,
+              [data.chatId]: {
+                ...current.chats[data.chatId],
+                attachmentCount: data.attachmentCount,
+              },
+            },
+          };
+        });
+        if (outgoingFileRef.current?.transferId === data.transferId) {
+          outgoingFileRef.current = null;
+          pendingFileIdRef.current = null;
+          setSendingFile(false);
+        }
+        setNotice(data.message || 'Gửi file đã bị hủy.');
+        break;
       case 'chat_closed':
         removeChat(data.chatId, `Cuộc chat với @${data.peerUsername} đã kết thúc.`);
         break;
@@ -351,6 +428,7 @@ export default function ChatApp() {
         setSearching(false);
         if (pendingFileIdRef.current) {
           pendingFileIdRef.current = null;
+          outgoingFileRef.current = null;
           setSendingFile(false);
         }
         setNotice(data.message || 'Có lỗi xảy ra.');
@@ -450,6 +528,14 @@ export default function ChatApp() {
       ws.addEventListener('close', (event) => {
         if (socketRef.current === ws) socketRef.current = null;
         if (cancelled || manualEndRef.current) return;
+
+        if (outgoingFileRef.current) {
+          outgoingFileRef.current = null;
+          pendingFileIdRef.current = null;
+          setSendingFile(false);
+          setNotice('Kết nối bị gián đoạn. File chưa được gửi hoàn tất.');
+        }
+        incomingFilesRef.current.clear();
 
         setConnection('reconnecting');
         setOnlineCount(0);
@@ -623,6 +709,38 @@ export default function ChatApp() {
     });
   };
 
+  const streamFileChunks = async (transferId) => {
+    const transfer = outgoingFileRef.current;
+    if (!transfer || transfer.transferId !== transferId) return;
+
+    try {
+      for (let offset = 0; offset < transfer.file.data.length; offset += FILE_CHUNK_BASE64_LENGTH) {
+        while (socketRef.current?.bufferedAmount > MAX_SOCKET_BUFFER) {
+          await new Promise((resolve) => window.setTimeout(resolve, 20));
+          if (outgoingFileRef.current?.transferId !== transferId) return;
+        }
+
+        const data = transfer.file.data.slice(offset, offset + FILE_CHUNK_BASE64_LENGTH);
+        if (!send({ type: 'file_chunk', chatId: transfer.chatId, transferId, data })) {
+          throw new Error('SEND_FAILED');
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+      }
+
+      if (!send({ type: 'file_end', chatId: transfer.chatId, transferId })) {
+        throw new Error('SEND_FAILED');
+      }
+    } catch {
+      if (outgoingFileRef.current?.transferId !== transferId) return;
+      send({ type: 'file_cancel', chatId: transfer.chatId, transferId });
+      outgoingFileRef.current = null;
+      pendingFileIdRef.current = null;
+      setSendingFile(false);
+      setNotice('Không thể gửi hoàn tất file. Vui lòng thử lại.');
+    }
+  };
+  startFileStreamRef.current = streamFileChunks;
+
   const sendFile = async (file) => {
     const chat = activeChat;
     if (!file || !chat || chat.peerOnline === false || sendingFile) return;
@@ -637,8 +755,8 @@ export default function ChatApp() {
     }
 
     setSendingFile(true);
-    const clientMessageId = crypto.randomUUID();
-    pendingFileIdRef.current = clientMessageId;
+    const transferId = crypto.randomUUID();
+    pendingFileIdRef.current = transferId;
 
     try {
       const dataUrl = await new Promise((resolve, reject) => {
@@ -650,15 +768,22 @@ export default function ChatApp() {
       const commaIndex = dataUrl.indexOf(',');
       const data = commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : '';
       const chatStillExists = sessionRef.current?.chats?.[chat.id];
-      if (!chatStillExists || !send({
-        type: 'file_message',
+      outgoingFileRef.current = {
+        transferId,
         chatId: chat.id,
-        clientMessageId,
         file: { name: file.name, type: file.type, size: file.size, data },
+        timestamp: Date.now(),
+      };
+      if (!chatStillExists || !send({
+        type: 'file_start',
+        chatId: chat.id,
+        transferId,
+        file: { name: file.name, type: file.type, size: file.size },
       })) {
         throw new Error('SEND_FAILED');
       }
     } catch {
+      outgoingFileRef.current = null;
       pendingFileIdRef.current = null;
       setSendingFile(false);
       setNotice('Không thể đọc hoặc gửi file. Vui lòng thử lại.');
