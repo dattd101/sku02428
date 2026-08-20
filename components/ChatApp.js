@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 const STORAGE_KEY = 'tempchat:session:v1';
 const MAX_MESSAGE_LENGTH = 2000;
 const CHAT_DURATION_MINUTES = 60;
-const MAX_FILE_SIZE = 10 * 1024 * 1024;
+const MAX_FILE_SIZE = 2 * 1024 * 1024;
 const MAX_FILE_SENDS_PER_CHAT = 5;
 const FILE_CHUNK_BASE64_LENGTH = 128 * 1024;
 const MAX_SOCKET_BUFFER = 512 * 1024;
@@ -393,7 +393,7 @@ export default function ChatApp() {
           pendingFileIdRef.current = null;
           setSendingFile(false);
         }
-        setNotice(data.message || 'Gửi file đã bị hủy.');
+        setNotice(`Gửi file thất bại: ${data.message || 'File đã bị hủy.'}`);
         break;
       case 'chat_closed':
         removeChat(data.chatId, `Cuộc chat với @${data.peerUsername} đã kết thúc.`);
@@ -430,6 +430,8 @@ export default function ChatApp() {
           pendingFileIdRef.current = null;
           outgoingFileRef.current = null;
           setSendingFile(false);
+          setNotice(`Gửi file thất bại: ${data.message || 'Có lỗi xảy ra.'}`);
+          break;
         }
         setNotice(data.message || 'Có lỗi xảy ra.');
         break;
@@ -750,7 +752,7 @@ export default function ChatApp() {
       return;
     }
     if (file.size > MAX_FILE_SIZE) {
-      setNotice('File vượt quá dung lượng tối đa 10 MB.');
+      setNotice('File vượt quá dung lượng tối đa 2 MB.');
       return;
     }
 
