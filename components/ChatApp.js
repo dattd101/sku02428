@@ -416,7 +416,7 @@ export default function ChatApp() {
 
       if (candidates.length === 0) {
         setConnection('config_error');
-        setConnectionError('Không có WebSocket URL hợp lệ. Với GitHub Pages/HTTPS, hãy cấu hình NEXT_PUBLIC_WS_URL bằng wss://.');
+        setConnectionError('Không có WebSocket URL hợp lệ. Hãy cấu hình NEXT_PUBLIC_WS_URL bằng địa chỉ wss:// của backend rồi deploy lại.');
         return;
       }
 

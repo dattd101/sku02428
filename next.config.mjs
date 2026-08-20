@@ -8,6 +8,9 @@ const nextConfig = {
   output: 'export',
   trailingSlash: true,
   basePath,
+  env: {
+    NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL || 'wss://sku02428wss.vercel.app/api/ws',
+  },
   images: {
     unoptimized: true,
   },
