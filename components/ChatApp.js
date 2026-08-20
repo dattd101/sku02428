@@ -736,7 +736,7 @@ export default function ChatApp() {
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder={connection === 'online' ? 'Tìm user online...' : 'Chờ WebSocket kết nối...'}
+              placeholder={connection === 'online' ? 'Dán chính xác username...' : 'Chờ WebSocket kết nối...'}
               maxLength={32}
               aria-label="Tìm user online"
               disabled={connection !== 'online'}
@@ -745,10 +745,10 @@ export default function ChatApp() {
 
           {connection === 'online' && query.trim().length >= 2 && (
             <div className="search-panel">
-              <div className="section-label">Kết quả tìm kiếm</div>
+              <div className="section-label">User tìm thấy</div>
               {searching && <div className="empty-small">Đang tìm...</div>}
               {!searching && searchResults.length === 0 && (
-                <div className="empty-small">Không thấy user online.</div>
+                <div className="empty-small">Username không tồn tại hoặc đang offline.</div>
               )}
               {searchResults.map((user) => (
                 <div className="user-row" key={user.id}>
