@@ -1,0 +1,22 @@
+{
+  "name": "temp-session-chat",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "next build",
+    "dev:ws": "node --watch server/index.mjs",
+    "start:ws": "node server/index.mjs",
+    "check:ws": "node --check server/index.mjs",
+    "dev:web": "next dev"
+  },
+  "dependencies": {
+    "next": "15.5.23",
+    "react": "19.1.9",
+    "react-dom": "19.1.9",
+    "ws": "8.21.3"
+  }
+}
