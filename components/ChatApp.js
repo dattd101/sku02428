@@ -823,6 +823,34 @@ export default function ChatApp() {
     }
   };
 
+  const downloadFile = (file) => {
+    if (!file?.data) {
+      setNotice('File không còn khả dụng để tải xuống.');
+      return;
+    }
+
+    try {
+      const binary = window.atob(file.data);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+
+      const blob = new Blob([bytes], { type: file.type || 'application/octet-stream' });
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = file.name || 'download';
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch {
+      setNotice('Không thể tải file. Dữ liệu file không hợp lệ.');
+    }
+  };
+
   if (!session) {
     return <main className="boot">Đang tạo session tạm...</main>;
   }
@@ -965,12 +993,17 @@ export default function ChatApp() {
                               <strong>{message.file.name}</strong>
                               <small>{fileSizeLabel(message.file.size)}</small>
                               {message.file.data ? (
-                                <a
-                                  href={`data:${message.file.type};base64,${message.file.data}`}
-                                  download={message.file.name}
+                                <button
+                                  className="file-download"
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    downloadFile(message.file);
+                                  }}
                                 >
                                   Tải xuống
-                                </a>
+                                </button>
                               ) : (
                                 <em>File không còn sau khi tải lại trang</em>
                               )}
