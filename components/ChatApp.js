@@ -83,6 +83,12 @@ function fileSizeLabel(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function base64ByteLength(value) {
+  if (!value) return 0;
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
+}
+
 export default function ChatApp() {
   const [session, setSession] = useState(null);
   const [connection, setConnection] = useState('connecting');
@@ -100,6 +106,7 @@ export default function ChatApp() {
   const [now, setNow] = useState(() => Date.now());
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [sendingFile, setSendingFile] = useState(false);
+  const [fileProgress, setFileProgress] = useState({});
 
   const socketRef = useRef(null);
   const reconnectTimerRef = useRef(null);
@@ -156,6 +163,10 @@ export default function ChatApp() {
     if (activeChatRef.current === chatId) {
       setActiveChatId(null);
     }
+
+    setFileProgress((current) => Object.fromEntries(
+      Object.entries(current).filter(([, progress]) => progress.chatId !== chatId),
+    ));
 
     if (message) setNotice(message);
   }, []);
@@ -289,6 +300,7 @@ export default function ChatApp() {
         break;
       }
       case 'file_start': {
+        const mine = data.from.id === sessionRef.current?.sessionId;
         setSession((current) => {
           if (!current?.chats?.[data.chatId]) return current;
           const chat = current.chats[data.chatId];
@@ -304,8 +316,17 @@ export default function ChatApp() {
             },
           };
         });
+        setFileProgress((current) => ({
+          ...current,
+          [data.transferId]: {
+            chatId: data.chatId,
+            name: data.file.name,
+            direction: mine ? 'send' : 'receive',
+            percent: 0,
+          },
+        }));
 
-        if (data.from.id === sessionRef.current?.sessionId && outgoingFileRef.current?.transferId === data.transferId) {
+        if (mine && outgoingFileRef.current?.transferId === data.transferId) {
           outgoingFileRef.current.file = { ...data.file, data: outgoingFileRef.current.file.data };
           outgoingFileRef.current.timestamp = data.timestamp;
           startFileStreamRef.current?.(data.transferId);
@@ -316,6 +337,7 @@ export default function ChatApp() {
             file: data.file,
             timestamp: data.timestamp,
             chunks: [],
+            receivedBytes: 0,
           });
         }
         break;
@@ -324,6 +346,13 @@ export default function ChatApp() {
         const transfer = incomingFilesRef.current.get(data.transferId);
         if (transfer?.chatId === data.chatId && typeof data.data === 'string') {
           transfer.chunks.push(data.data);
+          transfer.receivedBytes += base64ByteLength(data.data);
+          const percent = transfer.file.size > 0
+            ? Math.min(99, Math.round((transfer.receivedBytes / transfer.file.size) * 100))
+            : 99;
+          setFileProgress((current) => current[data.transferId]
+            ? { ...current, [data.transferId]: { ...current[data.transferId], percent } }
+            : current);
         }
         break;
       }
@@ -371,10 +400,27 @@ export default function ChatApp() {
           pendingFileIdRef.current = null;
           setSendingFile(false);
         }
+        setFileProgress((current) => current[data.transferId]
+          ? { ...current, [data.transferId]: { ...current[data.transferId], percent: 100 } }
+          : current);
+        window.setTimeout(() => {
+          setFileProgress((current) => {
+            if (!current[data.transferId]) return current;
+            const next = { ...current };
+            delete next[data.transferId];
+            return next;
+          });
+        }, 500);
         break;
       }
       case 'file_abort':
         incomingFilesRef.current.delete(data.transferId);
+        setFileProgress((current) => {
+          if (!current[data.transferId]) return current;
+          const next = { ...current };
+          delete next[data.transferId];
+          return next;
+        });
         setSession((current) => {
           if (!current?.chats?.[data.chatId]) return current;
           return {
@@ -423,13 +469,21 @@ export default function ChatApp() {
         setActiveChatId(null);
         setSearchResults([]);
         setIncomingRequests([]);
+        setFileProgress({});
         break;
       case 'error':
         setSearching(false);
         if (pendingFileIdRef.current) {
+          const failedTransferId = pendingFileIdRef.current;
           pendingFileIdRef.current = null;
           outgoingFileRef.current = null;
           setSendingFile(false);
+          setFileProgress((current) => {
+            if (!current[failedTransferId]) return current;
+            const next = { ...current };
+            delete next[failedTransferId];
+            return next;
+          });
           setNotice(`Gửi file thất bại: ${data.message || 'Có lỗi xảy ra.'}`);
           break;
         }
@@ -538,6 +592,7 @@ export default function ChatApp() {
           setNotice('Kết nối bị gián đoạn. File chưa được gửi hoàn tất.');
         }
         incomingFilesRef.current.clear();
+        setFileProgress({});
 
         setConnection('reconnecting');
         setOnlineCount(0);
@@ -726,6 +781,12 @@ export default function ChatApp() {
         if (!send({ type: 'file_chunk', chatId: transfer.chatId, transferId, data })) {
           throw new Error('SEND_FAILED');
         }
+        const percent = transfer.file.data.length > 0
+          ? Math.min(99, Math.round(((offset + data.length) / transfer.file.data.length) * 100))
+          : 99;
+        setFileProgress((current) => current[transferId]
+          ? { ...current, [transferId]: { ...current[transferId], percent } }
+          : current);
         await new Promise((resolve) => window.setTimeout(resolve, 0));
       }
 
@@ -738,6 +799,12 @@ export default function ChatApp() {
       outgoingFileRef.current = null;
       pendingFileIdRef.current = null;
       setSendingFile(false);
+      setFileProgress((current) => {
+        if (!current[transferId]) return current;
+        const next = { ...current };
+        delete next[transferId];
+        return next;
+      });
       setNotice('Không thể gửi hoàn tất file. Vui lòng thử lại.');
     }
   };
@@ -759,6 +826,15 @@ export default function ChatApp() {
     setSendingFile(true);
     const transferId = crypto.randomUUID();
     pendingFileIdRef.current = transferId;
+    setFileProgress((current) => ({
+      ...current,
+      [transferId]: {
+        chatId: chat.id,
+        name: file.name,
+        direction: 'send',
+        percent: 0,
+      },
+    }));
 
     try {
       const dataUrl = await new Promise((resolve, reject) => {
@@ -788,6 +864,12 @@ export default function ChatApp() {
       outgoingFileRef.current = null;
       pendingFileIdRef.current = null;
       setSendingFile(false);
+      setFileProgress((current) => {
+        if (!current[transferId]) return current;
+        const next = { ...current };
+        delete next[transferId];
+        return next;
+      });
       setNotice('Không thể đọc hoặc gửi file. Vui lòng thử lại.');
     }
   };
@@ -808,6 +890,7 @@ export default function ChatApp() {
     setActiveChatId(null);
     setIncomingRequests([]);
     setSearchResults([]);
+    setFileProgress({});
     setQuery('');
     setNotice('Phiên cũ đã được xoá. Đang tạo phiên mới...');
   };
@@ -1017,6 +1100,33 @@ export default function ChatApp() {
                     </div>
                   );
                 })}
+                {Object.entries(fileProgress)
+                  .filter(([, progress]) => progress.chatId === activeChat.id)
+                  .map(([transferId, progress]) => (
+                    <div
+                      className={`message-row file-progress-row ${progress.direction === 'send' ? 'mine' : ''}`}
+                      key={transferId}
+                      role="status"
+                      aria-live="polite"
+                    >
+                      <div className="bubble file-progress-card">
+                        <div className="file-progress-heading">
+                          <span>{progress.direction === 'send' ? 'Đang gửi' : 'Đang nhận'} {progress.name}</span>
+                          <strong>{progress.percent}%</strong>
+                        </div>
+                        <div
+                          className="file-progress-track"
+                          role="progressbar"
+                          aria-label={`${progress.direction === 'send' ? 'Đang gửi' : 'Đang nhận'} ${progress.name}`}
+                          aria-valuemin="0"
+                          aria-valuemax="100"
+                          aria-valuenow={progress.percent}
+                        >
+                          <span style={{ width: `${progress.percent}%` }} />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 <div ref={messagesEndRef} />
               </div>
 

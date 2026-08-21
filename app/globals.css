@@ -310,6 +310,38 @@ button { cursor: pointer; }
 .file-download:hover { text-decoration: underline; }
 .file-copy em { color: #9a6a48; font-size: 10px; font-style: normal; }
 
+.file-progress-card { min-width: min(300px, 68vw); }
+.file-progress-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 7px;
+  font-size: 11px;
+}
+.file-progress-heading span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-progress-heading strong { flex: 0 0 auto; }
+.file-progress-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(77, 115, 232, .16);
+}
+.file-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #5d86ff, #32c7a1);
+  transition: width .18s ease-out;
+}
+.file-progress-row.mine .file-progress-track { background: rgba(255, 255, 255, .22); }
+.file-progress-row.mine .file-progress-track span { background: #ffffff; }
+
 .composer {
   flex: 0 0 auto;
   position: relative;
