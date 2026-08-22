@@ -5,8 +5,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 const STORAGE_KEY = 'tempchat:session:v1';
 const MAX_MESSAGE_LENGTH = 2000;
 const CHAT_DURATION_MINUTES = 60;
-const MAX_FILE_SIZE = 2 * 1024 * 1024;
-const MAX_FILE_SENDS_PER_CHAT = 5;
+const MAX_FILE_SIZE = 3.5 * 1024 * 1024;
+const MAX_FILE_SENDS_PER_CHAT = 30;
 const FILE_CHUNK_BASE64_LENGTH = 128 * 1024;
 const MAX_SOCKET_BUFFER = 512 * 1024;
 const SIMPLE_EMOJIS = ['😀', '😂', '😍', '🥰', '😎', '😭', '😡', '👍', '👏', '🙏', '❤️', '🎉'];
@@ -819,7 +819,7 @@ export default function ChatApp() {
       return;
     }
     if (file.size > MAX_FILE_SIZE) {
-      setNotice('File vượt quá dung lượng tối đa 2 MB.');
+      setNotice('File vượt quá dung lượng tối đa 3.5 MB.');
       return;
     }
 
