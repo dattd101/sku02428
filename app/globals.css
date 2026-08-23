@@ -342,6 +342,26 @@ button { cursor: pointer; }
 .file-progress-row.mine .file-progress-track { background: rgba(255, 255, 255, .22); }
 .file-progress-row.mine .file-progress-track span { background: #ffffff; }
 
+.file-batch-status {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 18px;
+  border-top: 1px solid #e1e8f5;
+  background: #f6f9ff;
+  color: #53627a;
+  font-size: 11px;
+}
+.file-batch-status span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-batch-status strong { flex: 0 0 auto; color: #3559c7; }
+
 .composer {
   flex: 0 0 auto;
   position: relative;

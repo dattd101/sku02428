@@ -107,6 +107,7 @@ export default function ChatApp() {
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [sendingFile, setSendingFile] = useState(false);
   const [fileProgress, setFileProgress] = useState({});
+  const [fileBatch, setFileBatch] = useState(null);
 
   const socketRef = useRef(null);
   const reconnectTimerRef = useRef(null);
@@ -125,6 +126,8 @@ export default function ChatApp() {
   const outgoingFileRef = useRef(null);
   const incomingFilesRef = useRef(new Map());
   const startFileStreamRef = useRef(null);
+  const startNextFileRef = useRef(null);
+  const fileQueueRef = useRef([]);
 
   useEffect(() => {
     const initial = loadState();
@@ -167,6 +170,8 @@ export default function ChatApp() {
     setFileProgress((current) => Object.fromEntries(
       Object.entries(current).filter(([, progress]) => progress.chatId !== chatId),
     ));
+    setFileBatch((current) => current?.chatId === chatId ? null : current);
+    fileQueueRef.current = fileQueueRef.current.filter((queued) => queued.chatId !== chatId);
 
     if (message) setNotice(message);
   }, []);
@@ -322,6 +327,8 @@ export default function ChatApp() {
             chatId: data.chatId,
             name: data.file.name,
             direction: mine ? 'send' : 'receive',
+            position: data.batchPosition ?? 1,
+            total: data.batchTotal ?? 1,
             percent: 0,
           },
         }));
@@ -398,7 +405,7 @@ export default function ChatApp() {
         if (outgoing) {
           outgoingFileRef.current = null;
           pendingFileIdRef.current = null;
-          setSendingFile(false);
+          window.setTimeout(() => startNextFileRef.current?.(), 0);
         }
         setFileProgress((current) => current[data.transferId]
           ? { ...current, [data.transferId]: { ...current[data.transferId], percent: 100 } }
@@ -437,7 +444,7 @@ export default function ChatApp() {
         if (outgoingFileRef.current?.transferId === data.transferId) {
           outgoingFileRef.current = null;
           pendingFileIdRef.current = null;
-          setSendingFile(false);
+          window.setTimeout(() => startNextFileRef.current?.(), 0);
         }
         setNotice(`Gửi file thất bại: ${data.message || 'File đã bị hủy.'}`);
         break;
@@ -470,6 +477,11 @@ export default function ChatApp() {
         setSearchResults([]);
         setIncomingRequests([]);
         setFileProgress({});
+        setFileBatch(null);
+        fileQueueRef.current = [];
+        outgoingFileRef.current = null;
+        pendingFileIdRef.current = null;
+        setSendingFile(false);
         break;
       case 'error':
         setSearching(false);
@@ -477,7 +489,7 @@ export default function ChatApp() {
           const failedTransferId = pendingFileIdRef.current;
           pendingFileIdRef.current = null;
           outgoingFileRef.current = null;
-          setSendingFile(false);
+          window.setTimeout(() => startNextFileRef.current?.(), 0);
           setFileProgress((current) => {
             if (!current[failedTransferId]) return current;
             const next = { ...current };
@@ -588,11 +600,13 @@ export default function ChatApp() {
         if (outgoingFileRef.current) {
           outgoingFileRef.current = null;
           pendingFileIdRef.current = null;
-          setSendingFile(false);
           setNotice('Kết nối bị gián đoạn. File chưa được gửi hoàn tất.');
         }
         incomingFilesRef.current.clear();
         setFileProgress({});
+        setFileBatch(null);
+        fileQueueRef.current = [];
+        setSendingFile(false);
 
         setConnection('reconnecting');
         setOnlineCount(0);
@@ -798,7 +812,6 @@ export default function ChatApp() {
       send({ type: 'file_cancel', chatId: transfer.chatId, transferId });
       outgoingFileRef.current = null;
       pendingFileIdRef.current = null;
-      setSendingFile(false);
       setFileProgress((current) => {
         if (!current[transferId]) return current;
         const next = { ...current };
@@ -806,32 +819,40 @@ export default function ChatApp() {
         return next;
       });
       setNotice('Không thể gửi hoàn tất file. Vui lòng thử lại.');
+      window.setTimeout(() => startNextFileRef.current?.(), 0);
     }
   };
   startFileStreamRef.current = streamFileChunks;
 
-  const sendFile = async (file) => {
-    const chat = activeChat;
-    if (!file || !chat || chat.peerOnline === false || sendingFile) return;
-    const maxFileSends = chat.maxFileSends ?? MAX_FILE_SENDS_PER_CHAT;
-    if ((chat.attachmentCount ?? 0) >= maxFileSends) {
-      setNotice(`Cuộc chat chỉ được gửi tối đa ${maxFileSends} file.`);
-      return;
-    }
-    if (file.size > MAX_FILE_SIZE) {
-      setNotice('File vượt quá dung lượng tối đa 3.5 MB.');
+  const startNextFile = async () => {
+    const queued = fileQueueRef.current.shift();
+    if (!queued) {
+      setSendingFile(false);
+      setFileBatch(null);
       return;
     }
 
-    setSendingFile(true);
+    const { file, chatId, position, total } = queued;
+    const currentChat = sessionRef.current?.chats?.[chatId];
+    if (!currentChat || currentChat.peerOnline === false) {
+      fileQueueRef.current = [];
+      setSendingFile(false);
+      setFileBatch(null);
+      setNotice('Đã dừng hàng đợi file vì cuộc chat không còn kết nối.');
+      return;
+    }
+
     const transferId = crypto.randomUUID();
     pendingFileIdRef.current = transferId;
+    setFileBatch({ chatId, current: position, total, name: file.name });
     setFileProgress((current) => ({
       ...current,
       [transferId]: {
-        chatId: chat.id,
+        chatId,
         name: file.name,
         direction: 'send',
+        position,
+        total,
         percent: 0,
       },
     }));
@@ -845,25 +866,28 @@ export default function ChatApp() {
       });
       const commaIndex = dataUrl.indexOf(',');
       const data = commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : '';
-      const chatStillExists = sessionRef.current?.chats?.[chat.id];
+      const chatStillExists = sessionRef.current?.chats?.[chatId];
       outgoingFileRef.current = {
         transferId,
-        chatId: chat.id,
+        chatId,
         file: { name: file.name, type: file.type, size: file.size, data },
+        batchPosition: position,
+        batchTotal: total,
         timestamp: Date.now(),
       };
       if (!chatStillExists || !send({
         type: 'file_start',
-        chatId: chat.id,
+        chatId,
         transferId,
         file: { name: file.name, type: file.type, size: file.size },
+        batchPosition: position,
+        batchTotal: total,
       })) {
         throw new Error('SEND_FAILED');
       }
     } catch {
       outgoingFileRef.current = null;
       pendingFileIdRef.current = null;
-      setSendingFile(false);
       setFileProgress((current) => {
         if (!current[transferId]) return current;
         const next = { ...current };
@@ -871,7 +895,49 @@ export default function ChatApp() {
         return next;
       });
       setNotice('Không thể đọc hoặc gửi file. Vui lòng thử lại.');
+      window.setTimeout(() => startNextFileRef.current?.(), 0);
     }
+  };
+  startNextFileRef.current = startNextFile;
+
+  const sendFiles = (selectedFiles) => {
+    const chat = activeChat;
+    if (!selectedFiles.length || !chat || chat.peerOnline === false || sendingFile) return;
+
+    const maxFileSends = chat.maxFileSends ?? MAX_FILE_SENDS_PER_CHAT;
+    const remaining = Math.max(0, maxFileSends - (chat.attachmentCount ?? 0));
+    if (remaining === 0) {
+      setNotice(`Cuộc chat chỉ được gửi tối đa ${maxFileSends} file.`);
+      return;
+    }
+
+    const selected = selectedFiles.slice(0, MAX_FILE_SENDS_PER_CHAT);
+    const valid = selected.filter((file) => file.size <= MAX_FILE_SIZE);
+    const queued = valid.slice(0, remaining);
+    const oversizedCount = selected.length - valid.length;
+    const omittedCount = selectedFiles.length - selected.length + valid.length - queued.length;
+
+    if (queued.length === 0) {
+      setNotice(oversizedCount > 0
+        ? 'Không có file hợp lệ. Mỗi file chỉ được tối đa 3.5 MB.'
+        : `Cuộc chat chỉ còn ${remaining} lượt gửi file.`);
+      return;
+    }
+
+    fileQueueRef.current = queued.map((file, index) => ({
+      file,
+      chatId: chat.id,
+      position: index + 1,
+      total: queued.length,
+    }));
+    setSendingFile(true);
+    setFileBatch({ chatId: chat.id, current: 0, total: queued.length, name: '' });
+
+    const skipped = oversizedCount + omittedCount;
+    setNotice(skipped > 0
+      ? `Đã thêm ${queued.length} file vào hàng đợi, bỏ qua ${skipped} file vượt giới hạn.`
+      : `Đã thêm ${queued.length} file vào hàng đợi gửi.`);
+    window.setTimeout(() => startNextFileRef.current?.(), 0);
   };
 
   const closeChat = () => {
@@ -891,6 +957,11 @@ export default function ChatApp() {
     setIncomingRequests([]);
     setSearchResults([]);
     setFileProgress({});
+    setFileBatch(null);
+    fileQueueRef.current = [];
+    outgoingFileRef.current = null;
+    pendingFileIdRef.current = null;
+    setSendingFile(false);
     setQuery('');
     setNotice('Phiên cũ đã được xoá. Đang tạo phiên mới...');
   };
@@ -1111,7 +1182,9 @@ export default function ChatApp() {
                     >
                       <div className="bubble file-progress-card">
                         <div className="file-progress-heading">
-                          <span>{progress.direction === 'send' ? 'Đang gửi' : 'Đang nhận'} {progress.name}</span>
+                          <span>
+                            {progress.direction === 'send' ? 'Đang gửi' : 'Đang nhận'} file {progress.position}/{progress.total}: {progress.name}
+                          </span>
                           <strong>{progress.percent}%</strong>
                         </div>
                         <div
@@ -1129,6 +1202,17 @@ export default function ChatApp() {
                   ))}
                 <div ref={messagesEndRef} />
               </div>
+
+              {fileBatch?.chatId === activeChat.id && (
+                <div className="file-batch-status" role="status" aria-live="polite">
+                  <span>
+                    {fileBatch.current > 0
+                      ? `Đang gửi file ${fileBatch.current}/${fileBatch.total}: ${fileBatch.name}`
+                      : `Đang chuẩn bị ${fileBatch.total} file...`}
+                  </span>
+                  <strong>Tối đa {MAX_FILE_SENDS_PER_CHAT} file/chat</strong>
+                </div>
+              )}
 
               <div className="composer">
                 <div className="composer-tools">
@@ -1158,10 +1242,11 @@ export default function ChatApp() {
                     ref={fileInputRef}
                     className="file-input"
                     type="file"
+                    multiple
                     onChange={(event) => {
-                      const file = event.target.files?.[0];
+                      const files = Array.from(event.target.files || []);
                       event.target.value = '';
-                      if (file) sendFile(file);
+                      if (files.length) sendFiles(files);
                     }}
                   />
                   {emojiOpen && (
